@@ -1,2 +1,3 @@
 def get_train_data():
-    return "E://train_data11/nao/data/"
+    return ""
+#请更换为您的数据集路径

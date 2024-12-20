@@ -4,18 +4,22 @@ import os
 from pathlib import Path
 from threading import Thread
 
+import cv2
+from matplotlib import pyplot as plt
 import numpy as np
 import torch
 import yaml
 from tqdm import tqdm
 
 from models.experimental import attempt_load
+from models.yolo import Model
 from utils.datasets import create_dataloader
 from utils.general import coco80_to_coco91_class, check_dataset, check_file, check_img_size, check_requirements, \
     box_iou, non_max_suppression, scale_coords, xyxy2xywh, xywh2xyxy, set_logging, increment_path, colorstr
 from utils.metrics import ap_per_class, ConfusionMatrix
 from utils.plots import plot_images, output_to_target, plot_study_txt
 from utils.torch_utils import select_device, time_synchronized, TracedModel
+from utils.datasets import CustomDataset
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
@@ -287,7 +291,123 @@ def test(data,
         maps[c] = ap[i]
     return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
 
+import os
+from pathlib import Path
 
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser(prog='test.py')
+#     parser.add_argument('--weights', nargs='+', type=str, default=['runs/train/exp/weights/best.pt'], help='model.pt path(s)')
+#     parser.add_argument('--data-dir', type=str, required=True, help='Path to validation dataset directory')
+#     parser.add_argument('--annotations', type=str, required=True, help='Path to annotations JSON file')
+#     parser.add_argument('--batch-size', type=int, default=1, help='size of each image batch')
+#     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
+#     parser.add_argument('--conf-thres', type=float, default=0.001, help='object confidence threshold')
+#     parser.add_argument('--iou-thres', type=float, default=0.6, help='IOU threshold for NMS')
+#     parser.add_argument('--device', default='0', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+#     parser.add_argument('--save-results', type=str, default='runs/test/all_predictions.txt', help='Path to save all predictions in a single file')
+#     parser.add_argument('--save-images', action='store_true', help='Save result images with predictions')
+#     parser.add_argument('--save-summary', action='store_true', help='Generate a summary image for all results')
+#     parser.add_argument('--project', default='runs/test', help='save to project/name')
+#     parser.add_argument('--name', default='exp', help='save to project/name')
+#     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+#     parser.add_argument('--workers', type=int, default=2, help='Number of workers for dataloader')
+#     parser.add_argument('--rect', action='store_true', help='rectangular inference')
+#     parser.add_argument('--single_cls', action='store_true', help='treat as single-class dataset')
+#     opt = parser.parse_args()
+
+#     print(opt)
+
+#     # Ensure directories are created
+#     save_dir = Path(opt.project) / opt.name
+#     save_dir.mkdir(parents=True, exist_ok=opt.exist_ok)
+#     result_image_dir = save_dir / "result_images"
+#     result_image_dir.mkdir(parents=True, exist_ok=True)
+
+#     # Run the test
+#     device = select_device(opt.device)
+#     model = attempt_load(opt.weights, map_location=device)
+#     model.eval()
+#     dataloader, dataset = create_dataloader(
+#         path=opt.data_dir,
+#         imgsz=opt.img_size,
+#         batch_size=opt.batch_size,
+#         stride=int(model.stride.max()),  # Ensure stride matches the model
+#         opt=opt,
+#         workers=opt.workers,
+#         rect=opt.rect,
+#         prefix="Test: "
+#     )
+
+#     print(f"Running test on dataset from {opt.data_dir} with annotations {opt.annotations}")
+
+#     all_predictions_path = save_dir / "all_predictions.txt"
+#     with open(all_predictions_path, 'w') as f:
+#         for batch_idx, (images, targets, paths) in enumerate(tqdm(dataloader, desc="Testing")):
+#             images = images.to(device)
+#             with torch.no_grad():
+#                 preds = model(images)
+#                 preds = preds[0]  # Extract main predictions if model outputs multiple tensors
+#                 preds_after_nms = [
+#                     non_max_suppression(pred.unsqueeze(0), conf_thres=opt.conf_thres, iou_thres=opt.iou_thres)[0]
+#                     for pred in preds
+#                 ]
+
+#             for i, path in enumerate(paths):
+#                 img_name = Path(path).name
+#                 pred = preds_after_nms[i]
+
+#                 # Save predictions to all_predictions.txt
+#                 if pred is not None and len(pred):
+#                     pred = pred.cpu().numpy()
+#                     for p in pred:
+#                         x_min, y_min, x_max, y_max, conf, cls = map(float, p)
+#                         f.write(f"{img_name} {int(cls)} {conf:.6f} {x_min:.2f} {y_min:.2f} {x_max:.2f} {y_max:.2f}\n")
+
+#                 # Optional: Save result images
+#                 if opt.save_images:
+#                     img = cv2.imread(path)
+#                     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#                     if pred is not None and len(pred):
+#                         for p in pred:
+#                             x_min, y_min, x_max, y_max, conf, cls = map(float, p)
+#                             label = f"{int(cls)} {conf:.2f}"
+#                             cv2.rectangle(img, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
+#                             cv2.putText(img, label, (int(x_min), int(y_min) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+#                     save_path = result_image_dir / f"{img_name}_result.png"
+#                     cv2.imwrite(str(save_path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+
+#     # Optional: Generate a summary image
+#     if opt.save_summary:
+#         print("Generating summary image...")
+#         num_images = len(dataset)
+#         cols = 2
+#         rows = (num_images + cols - 1) // cols  # Calculate rows for the summary
+#         plt.figure(figsize=(20, 10 * rows))
+#         for i, path in enumerate(paths):
+#             img = cv2.imread(path)
+#             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+#             pred = preds_after_nms[i]
+#             plt.subplot(rows, cols, i + 1)
+#             plt.imshow(img)
+#             plt.axis('off')
+#             if pred is not None and len(pred):
+#                 for p in pred:
+#                     x_min, y_min, x_max, y_max, conf, cls = map(float, p)
+#                     label = f"{int(cls)} {conf:.2f}"
+#                     plt.gca().add_patch(plt.Rectangle((x_min, y_min), x_max - x_min, y_max - y_min,
+#                                                       linewidth=2, edgecolor='red', facecolor='none'))
+#                     plt.text(x_min, y_min - 5, label, color='white', fontsize=12,
+#                              bbox=dict(facecolor='red', edgecolor='none', pad=1.5))
+#         summary_image_path = save_dir / "summary_result.png"
+#         plt.savefig(summary_image_path, bbox_inches='tight', pad_inches=0.1)
+#         plt.close()
+
+#     print(f"Testing completed. Results saved to {save_dir}")
+
+
+
+
+# 原测试，测试 Br35H 数据集
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='test.py')
     parser.add_argument('--weights', nargs='+', type=str, default=['runs/train/exp/weights/best.pt', ], help='model.pt path(s)')
@@ -314,6 +434,7 @@ if __name__ == '__main__':
     opt.save_json |= opt.data.endswith('coco.yaml')
     opt.data = check_file(opt.data)  # check file
     print(opt)
+    print("这里是数字图像处理的实验，肖磊正在测试 Br35H 数据集")
     #check_requirements()
     if opt.task in ('train', 'val', 'test'):  # run normally
         test(opt.data,

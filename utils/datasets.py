@@ -1,6 +1,7 @@
 # Dataset utils and dataloaders
 
 import glob
+import json
 import logging
 import math
 import os
@@ -1318,3 +1319,65 @@ def load_segmentations(self, index):
     #print(key)
     # /work/handsomejw66/coco17/
     return self.segs[key]
+
+class CustomDataset(Dataset):
+    def __init__(self, img_dir, annotations_file, img_size=640, augment=False):
+        self.img_dir = img_dir
+        self.annotations = json.load(open(annotations_file))
+        self.img_size = img_size
+        self.augment = augment
+        self.image_ids = list(self.annotations.keys())
+
+    def __len__(self):
+        return len(self.image_ids)
+
+    def __getitem__(self, idx):
+        # Load image
+        img_id = self.image_ids[idx]
+        img_info = self.annotations[img_id]
+        img_path = os.path.join(self.img_dir, img_info['filename'])
+        img = cv2.imread(img_path)
+        assert img is not None, f"Image {img_path} not found."
+
+        # Resize or pad image
+        img, _, _ = letterbox(img, self.img_size)
+
+        # Load annotations
+        regions = img_info['regions']
+        labels = []
+        for region in regions:
+            shape = region['shape_attributes']
+            # Convert polygon to bounding box (x, y, width, height)
+            x = min(shape['all_points_x'])
+            y = min(shape['all_points_y'])
+            w = max(shape['all_points_x']) - x
+            h = max(shape['all_points_y']) - y
+            labels.append([0, x, y, w, h])  # Assuming single-class (class_id = 0)
+
+        labels = np.array(labels)
+        # img = img[:, :, ::-1].transpose(2, 0, 1)  # Convert BGR to RGB and to CHW
+                # Fix negative strides issue
+        img = img[:, :, ::-1].copy()  # Convert BGR to RGB
+        img = img.transpose(2, 0, 1).copy()  # Convert to CHW and ensure contiguous array
+
+        return torch.from_numpy(img).float() / 255.0, torch.from_numpy(labels).float(), img_path
+
+    @staticmethod
+    def collate_fn(batch):
+        """
+        Combines a list of dataset samples into a batch.
+        """
+        images, labels, paths = zip(*batch)
+
+        # Stack images into a tensor of shape [batch_size, 3, H, W]
+        images = torch.stack(images, dim=0)
+
+        # Combine labels into a single tensor
+        all_labels = []
+        for i, label in enumerate(labels):
+            if label.size(0) > 0:  # If there are labels for this image
+                label[:, 0] = i  # Assign batch index to the first column
+            all_labels.append(label)
+        labels = torch.cat(all_labels, dim=0) if len(all_labels) > 0 else torch.zeros((0, 5))
+
+        return images, labels, paths
